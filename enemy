@@ -1,0 +1,134 @@
+extends CharacterBody2D
+
+@export var speed = 100.0
+@export var min_distance: int = 40 # Minimum patrol distance
+@export var max_distance: int = 120 # Maximum patrol distance
+@export var attack_range: int = 30 # Distance from player to stop moving
+@export var attack_interval: float = 2 # Time between attacks
+@export var damage_dealt: int = 10
+
+var start_position: Vector2 # Enemy's starting position
+var target_position: Vector2 # The next patrol destination
+var direction: int = 1 # 1 = right, -1 = left
+var is_moving: bool = false # Controls movement state
+var is_attacking: bool = false # Monitors enemy attack mode
+var life = 0
+
+@onready var player = null
+@onready var timer: Timer = $PauseTimer # Timer for pausing patrol
+@onready var attack_timer: Timer = $AttackTimer # Timer for attack cooldown
+@onready var demon: Sprite2D = $Sprite2D
+@onready var detection_area: Area2D = $AttackingArea
+@onready var hitbox = $Hitbox/CollisionShape2D
+
+
+func _ready():
+	start_position = Vector2(-650, 15) # Store initial position
+	set_new_target() # Pick a first target
+	play_animation("idle")
+
+func _physics_process(delta):
+	if not is_on_floor():
+		velocity += get_gravity() * delta
+	
+	if player:
+		follow_player(delta)
+	elif is_moving:
+		move_toward_target(delta)
+	
+	hitbox_flipped()
+	move_and_slide()
+
+func reset(_position):
+	position = _position
+	show()
+	$AnimationPlayer.play("idle")
+	life = 3
+
+func move_toward_target(delta):
+	var move_amount = speed * delta * direction
+	position.x += move_amount # Move along x-axis
+	
+	# Play walking animation
+	play_animation("walk")
+	# If demon is walking left, flip sprite
+	if direction == -1:
+		demon.flip_h = true
+	elif direction == 1:
+		demon.flip_h = false
+	
+	# Check if enemy has reached target position
+	if (direction == 1 && position.x >= target_position.x) || (direction == -1 && position.x <= target_position.x):
+		is_moving = false
+		play_animation("idle") # Switch to idle animation
+		start_pause() # Pause before switching direction
+
+func start_pause():
+	var wait_time = randf_range(2.0, 4.0) # Pick a random pause duration (2-4 secs)
+	timer.start(wait_time)
+
+func _on_pause_timer_timeout():
+	direction *= -1 # Reverse direction
+	set_new_target() # Set a new patrol target
+
+func set_new_target():
+	if player == null: # Only patrol if no player is detected
+		var random_distance = randi_range(min_distance, max_distance) # Pick a new patrol distance
+		target_position = Vector2((position.x + (random_distance * direction)), position.y) # Calculate target position
+		is_moving = true # Start moving
+
+func play_animation(anim_name: String):
+	$AnimationPlayer.play(anim_name) 
+
+### PLAYER DETECTION AND ATTACKING
+
+func follow_player(delta):
+	var player_pos = player.position.x
+	var stop_distance = attack_range * (1 if position.x < player_pos else -1)
+	target_position = Vector2((player_pos - stop_distance), position.y) # Stop just outside attack range
+	
+	if is_attacking && abs(target_position.x) < attack_range:
+		return
+	
+	# Move toward the new target position
+	direction = sign(target_position.x - position.x) # Set direction based on player position
+	if abs(position.x - target_position.x) > attack_range: # Avoid jittering when close
+		position.x += speed * delta * direction
+		is_moving = false # Stop moving when in attack range
+		play_animation("walk")
+		demon.flip_h = direction < 0
+	
+	if ((player.position.y * 1) - (position.y * 1)) < 20 && !is_attacking:
+		start_attacking()
+
+func start_attacking():
+	is_attacking = true
+	attack_timer.start(attack_interval) # Start attack cooldown
+
+func _on_attack_timer_timeout() -> void:
+	if player:
+		play_animation("attack")
+		deal_damage_to_player()
+		attack_timer.start(attack_interval) # Continue attacking
+
+func deal_damage_to_player():
+	if player.has_method("take_damage"):
+		player.take_damage(damage_dealt)
+
+func _on_attacking_area_body_entered(body: Node2D) -> void:
+	if body.is_in_group("Player"):
+		player = body # Ensure it's the player
+
+func _on_attacking_area_body_exited(body: Node2D) -> void:
+	if body.is_in_group("Player"): # Ensure it's the player
+		player = null
+		is_attacking = false
+		attack_timer.stop() # Stop attacking
+		set_new_target() # Resume patrol
+
+func hitbox_flipped():
+	# This function checks the player's flip_h bool and, if true, flips the Hitbox depending on player's direction.
+	if demon.flip_h == false:
+		hitbox.position.x = demon.position.x + 48.5 # This number is the position on the x axis compared to where player is. This would change depending on where the CollisionShape2D is placed when setting up the hitbox.
+	else:
+		hitbox.position.x = demon.position.x - 48.5
